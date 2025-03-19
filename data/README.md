@@ -1,38 +1,28 @@
-The easiest way to obtain the DPO dataset constructed by SeVa is to download data from [kevinke/data](https://huggingface.co/kevinke/data)
-
-In the meanwhile, you can follow SeVa pipeline to generate arbitrary number of DPO data with Step1-Step3.
-
 ### Step1: acquire dataset
-First acquire textvqa and ocrvqa split from [llava665k](https://huggingface.co/datasets/liuhaotian/LLaVA-Instruct-150K/blob/main/llava_v1_5_mix665k.json)
+Modify the json_path in `split_data.py` and run:
 ```
 cd step1
 python split_data.py
 ```
-Then we extract 8k image-question pairs of ocrvqa and textvqa, respectively.
-```
-python make_ocrvqa_data.py --data-num 8k
-python make_textvqa_data.py --data-num 8k
-```
-which will obtain the 'ocrvqa_image_question_list_8k.json' and 'textvqa_image_question_list_8k.json' in step1/ folder.
-### Step2: Generate augmented response
-In 'step2/' folder, generate choosen and rejected responses to ocrvqa image-question pairs. We recommand first choosing diffusion steps 500 for *your own data construction pipeline* since the results from steps 500 are more stable across multiple runs (although diffusion steps 800 could probably lead to better performance as used in SeVa-7B).
 
-First, generate *chosen* and *rejected* responses from ocrvqa data:
+### Step2: Generate preference data
+Set the necessary parameters in `ga.sh`, then:
 ```
-sh llava1.5_base_gen_ocrvqa8k.sh
-sh llava1.5_base_gen_ocrvqa8k_diffusion_step500.sh
+cd step2
+bash ga.sh
 ```
-Second, generate *chosen* and *rejected* responses from textvqa data:
-```
-sh llava1.5_base_gen_textvqa8k.sh
-sh llava1.5_base_gen_textvqa8k_diffusion_step500.sh
-```
-We will then obtain 4 unfiltered answer files named {textvqa/ocrvqa}_answer_file_8k_{base/diffusion_step500}.json
 
-### Step3: Simple Filtering
-Finally, we filter **equal** responses in ocrvqa and textvqa below:
+### Step3: Calculate the likelihood of paris (to be used to calculate reward scores in the future)
+We develop a method that allows full-param DPO training to run on a 40G machine. We find that the parameters of the reference model remain unchanged during the DPO optimization process, which means that the likelihood of the reference model for the samples is also constant. As a result, we pre-compute these likelihoods and save them in a JSON file. When we later use these samples, we simply call the pre-computed likelihoods to calculate the reward scores.
+
+Based on the above two steps, we obtain the JSON file `/data/step2/dpo_llava6k_0_chatQuestion_corGen_improveAll_ourLoss_noScores.json`. At this point, we need to run `bash run/run.sh --scoring` to calculate the sample likelihoods. We use 8 GPUs, which generates 8 `seek.json` files in the project directory. The `tool.py` in step 3 serves as a tool to merge these seek files.
+
 ```
-python make_pair_ocrvqa.py
-python make_pair_textvqa.py
+cd ..
+bash run/run.sh --scoring
+cd step3
+python tool.py
 ```
-It will obtain 'textvqa_dpo_8k_{aug_name}.json', 'ocrvqa_dpo_8k_{aug_name}.json', which the **final data for DPO training**. Finished!
+Because we use deepseek, this `--scoring` needs to be written into run.sh. It cannot be passed in using the command line. It is written `bash run/run.sh --scoring` here for the convenience of explanation.
+
+Finally you will get the file `./data/step3/dpo_llava6k_0_chatQuestion_corGen_improveAll_ourLoss-scores.json`, then we start DPO training.
